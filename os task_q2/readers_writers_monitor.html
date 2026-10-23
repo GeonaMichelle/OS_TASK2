@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Readers-Writers Problem - Monitor Solution</title>
+<style>
+  body { font-family: Arial, sans-serif; background: #eef0f4; color: #1f2937; margin: 0; }
+  .top { background: #2b3a55; color: #fff; padding: 18px 30px; }
+  .top h1 { font-size: 24px; margin: 0 0 6px; }
+  .top p { margin: 0; font-size: 14px; }
+  .ok { color: #5fe08a; font-weight: bold; }
+  .bad { color: #ff7b86; font-weight: bold; }
+  .main { padding: 20px 30px; }
+  .card { background: #fff; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,.12); padding: 16px 18px; margin-bottom: 16px; }
+  .card h2 { font-size: 16px; margin: 0 0 12px; color: #12284c; }
+  .bar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .bar button { padding: 8px 18px; font-size: 15px; background: #f0f0f0; border: 1px solid #888; border-radius: 4px; cursor: pointer; }
+  .bar select { padding: 6px; font-size: 15px; }
+  .spacer { flex: 1; }
+  .chip { font-size: 13px; padding: 3px 10px; border-radius: 4px; border: 1px solid #aaa; margin-left: 4px; }
+  .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .boxes { display: flex; flex-wrap: wrap; gap: 12px; }
+  .box { width: 176px; padding: 14px 6px; text-align: center; border-radius: 6px; border: 2px solid #aaa; font-size: 18px; }
+  .box b { display: block; font-size: 18px; }
+  .box small { display: block; font-size: 12px; margin-top: 4px; }
+  .idle { background: #e5e5e5; border-color: #aaa; }
+  .waiting { background: #fdeeb4; border-color: #e0b81a; }
+  .reading { background: #d3ecd7; border-color: #3aa655; }
+  .writing { background: #f8d4d8; border-color: #dd4a58; }
+  .finished { background: #cfe2ff; border-color: #3b82f6; }
+  .locked { color: #dd3344; }
+  .free { color: #198754; }
+  .tl-row { display: flex; align-items: center; margin-bottom: 6px; }
+  .tl-name { width: 38px; font-weight: bold; font-size: 14px; }
+  .tl-track { position: relative; flex: 1; height: 22px; background: #eee; border-radius: 3px; }
+  .seg { position: absolute; top: 0; height: 22px; }
+  #playhead { position: absolute; top: -4px; width: 2px; background: #000; z-index: 5; }
+  .tl-axis { display: flex; justify-content: space-between; margin-left: 38px; font-size: 12px; color: #555; }
+  .logwrap { max-height: 300px; overflow-y: auto; }
+  table { border-collapse: collapse; width: 100%; font-size: 14px; }
+  th { text-align: left; background: #edf0f5; padding: 6px 8px; position: sticky; top: 0; }
+  td { padding: 5px 8px; border-bottom: 1px solid #e3e3e3; }
+  tr.now td { font-weight: bold; }
+  ul.checks { margin: 0; padding-left: 20px; line-height: 1.7; }
+</style>
+</head>
+<body>
+<div class="top">
+  <h1>Readers-Writers Problem - monitor solution, writer preference (replay of a real run)</h1>
+  <p>5 readers, 2 writers, 3 rounds each | 84 events recorded | max readers at once: 5 | final value 6 (expected 6) | <span class="ok">all 8 checks passed</span></p>
+</div>
+<div class="main">
+
+<div class="card bar">
+  <button id="play">Play</button><button id="step">Step</button><button id="reset">Reset</button>
+  <span>speed</span>
+  <select id="speed"><option value="0.5">0.5x</option><option value="1" selected>1x</option>
+    <option value="2">2x</option><option value="4">4x</option></select>
+  <span>clock: <b id="clock">0 ms</b></span>
+  <span>event <b id="evno">0</b> / <span id="evtotal"></span></span>
+  <span class="spacer"></span>
+  <span>
+    <span class="chip idle">idle</span><span class="chip waiting">waiting</span><span class="chip reading">reading</span><span class="chip writing">writing</span><span class="chip finished">finished</span>
+  </span>
+</div>
+
+<div class="row2">
+  <div class="card"><h2>Readers</h2><div class="boxes" id="readers"></div></div>
+  <div class="card"><h2>Writers</h2><div class="boxes" id="writers"></div></div>
+</div>
+
+<div class="row2">
+  <div class="card">
+    <h2>Shared resource (critical section)</h2>
+    <p>status: <span id="status"></span></p>
+    <p>value: <b id="value" style="font-size:28px">0</b></p>
+    <p>last written by: <span id="lastw">-</span></p>
+  </div>
+  <div class="card">
+    <h2>Monitor state</h2>
+    <p>active_readers: <b id="m_ar">0</b></p>
+    <p>writer_active: <b id="m_wa">False</b></p>
+    <p>waiting_writers: <b id="m_ww">0</b></p>
+    <p>readers held back: <b id="m_hb">none</b></p>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Timeline (RES row = who holds the resource; yellow = waiting, green = reading, red = writing)</h2>
+  <div id="timeline" style="position:relative"></div>
+  <div class="tl-axis"><span>0 ms</span><span id="endms"></span></div>
+</div>
+
+<div class="card">
+  <h2>Event log recorded by the program</h2>
+  <div class="logwrap" id="logwrap">
+    <table><thead><tr><th>#</th><th>time</th><th>who</th><th>state</th><th>active_readers</th>
+    <th>writer_active</th><th>waiting_writers</th><th>held back</th><th>note</th></tr></thead>
+    <tbody id="log"></tbody></table>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Automatic verification checks</h2>
+  <ul class="checks"><li><span class="ok" style="color:#198754">PASS</span> - At most one writer was ever active</li><li><span class="ok" style="color:#198754">PASS</span> - A reader and a writer were never active together</li><li><span class="ok" style="color:#198754">PASS</span> - Active reader/writer counts never went negative</li><li><span class="ok" style="color:#198754">PASS</span> - Every reader finished all its rounds</li><li><span class="ok" style="color:#198754">PASS</span> - Every writer finished all its rounds</li><li><span class="ok" style="color:#198754">PASS</span> - Final value equals the expected value</li><li><span class="ok" style="color:#198754">PASS</span> - Final value equals the last successful write</li><li><span class="ok" style="color:#198754">PASS</span> - Monitor ended clean (no readers, no writer, nobody waiting)</li></ul>
+  <p style="font-size:13px;color:#555">Generated 22-10-2026 19:13:21. The page replays the events recorded by the Python program;
+  the thread order can be different in every run.</p>
+</div>
+
+</div>
+<script>
+const EVENTS = [{"n": 1, "t": 157, "who": "R5", "state": "waiting", "ar": 0, "rl": [], "wa": "no", "ww": 0, "hb": [], "value": 0, "last_writer": "-", "note": "wants to read"}, {"n": 2, "t": 157, "who": "R5", "state": "reading", "ar": 1, "rl": ["R5"], "wa": "no", "ww": 0, "hb": [], "value": 0, "last_writer": "-", "note": "reads value 0"}, {"n": 3, "t": 218, "who": "R2", "state": "waiting", "ar": 1, "rl": ["R5"], "wa": "no", "ww": 0, "hb": [], "value": 0, "last_writer": "-", "note": "wants to read"}, {"n": 4, "t": 218, "who": "R2", "state": "reading", "ar": 2, "rl": ["R5", "R2"], "wa": "no", "ww": 0, "hb": [], "value": 0, "last_writer": "-", "note": "reads value 0"}, {"n": 5, "t": 328, "who": "R4", "state": "waiting", "ar": 2, "rl": ["R5", "R2"], "wa": "no", "ww": 0, "hb": [], "value": 0, "last_writer": "-", "note": "wants to read"}, {"n": 6, "t": 329, "who": "R4", "state": "reading", "ar": 3, "rl": ["R5", "R2", "R4"], "wa": "no", "ww": 0, "hb": [], "value": 0, "last_writer": "-", "note": "reads value 0"}, {"n": 7, "t": 357, "who": "R3", "state": "waiting", "ar": 3, "rl": ["R5", "R2", "R4"], "wa": "no", "ww": 0, "hb": [], "value": 0, "last_writer": "-", "note": "wants to read"}, {"n": 8, "t": 357, "who": "R3", "state": "reading", "ar": 4, "rl": ["R5", "R2", "R4", "R3"], "wa": "no", "ww": 0, "hb": [], "value": 0, "last_writer": "-", "note": "reads value 0"}, {"n": 9, "t": 391, "who": "R1", "state": "waiting", "ar": 4, "rl": ["R5", "R2", "R4", "R3"], "wa": "no", "ww": 0, "hb": [], "value": 0, "last_writer": "-", "note": "wants to read"}, {"n": 10, "t": 391, "who": "R1", "state": "reading", "ar": 5, "rl": ["R5", "R2", "R4", "R3", "R1"], "wa": "no", "ww": 0, "hb": [], "value": 0, "last_writer": "-", "note": "reads value 0"}, {"n": 11, "t": 485, "who": "W2", "state": "waiting", "ar": 5, "rl": ["R5", "R2", "R4", "R3", "R1"], "wa": "no", "ww": 1, "hb": [], "value": 0, "last_writer": "-", "note": "wants to write"}, {"n": 12, "t": 548, "who": "W1", "state": "waiting", "ar": 5, "rl": ["R5", "R2", "R4", "R3", "R1"], "wa": "no", "ww": 2, "hb": [], "value": 0, "last_writer": "-", "note": "wants to write"}, {"n": 13, "t": 555, "who": "R4", "state": "finished", "ar": 4, "rl": ["R5", "R2", "R3", "R1"], "wa": "no", "ww": 2, "hb": [], "value": 0, "last_writer": "-", "note": "finished reading"}, {"n": 14, "t": 555, "who": "R4", "state": "idle", "ar": 4, "rl": ["R5", "R2", "R3", "R1"], "wa": "no", "ww": 2, "hb": [], "value": 0, "last_writer": "-", "note": "leaves the monitor"}, {"n": 15, "t": 638, "who": "R4", "state": "waiting", "ar": 4, "rl": ["R5", "R2", "R3", "R1"], "wa": "no", "ww": 2, "hb": ["R4"], "value": 0, "last_writer": "-", "note": "held back: writer active or waiting"}, {"n": 16, "t": 646, "who": "R2", "state": "finished", "ar": 3, "rl": ["R5", "R3", "R1"], "wa": "no", "ww": 2, "hb": ["R4"], "value": 0, "last_writer": "-", "note": "finished reading"}, {"n": 17, "t": 646, "who": "R2", "state": "idle", "ar": 3, "rl": ["R5", "R3", "R1"], "wa": "no", "ww": 2, "hb": ["R4"], "value": 0, "last_writer": "-", "note": "leaves the monitor"}, {"n": 18, "t": 653, "who": "R5", "state": "finished", "ar": 2, "rl": ["R3", "R1"], "wa": "no", "ww": 2, "hb": ["R4"], "value": 0, "last_writer": "-", "note": "finished reading"}, {"n": 19, "t": 654, "who": "R5", "state": "idle", "ar": 2, "rl": ["R3", "R1"], "wa": "no", "ww": 2, "hb": ["R4"], "value": 0, "last_writer": "-", "note": "leaves the monitor"}, {"n": 20, "t": 699, "who": "R3", "state": "finished", "ar": 1, "rl": ["R1"], "wa": "no", "ww": 2, "hb": ["R4"], "value": 0, "last_writer": "-", "note": "finished reading"}, {"n": 21, "t": 700, "who": "R3", "state": "idle", "ar": 1, "rl": ["R1"], "wa": "no", "ww": 2, "hb": ["R4"], "value": 0, "last_writer": "-", "note": "leaves the monitor"}, {"n": 22, "t": 866, "who": "R1", "state": "finished", "ar": 0, "rl": [], "wa": "no", "ww": 2, "hb": ["R4"], "value": 0, "last_writer": "-", "note": "finished reading"}, {"n": 23, "t": 867, "who": "R1", "state": "idle", "ar": 0, "rl": [], "wa": "no", "ww": 2, "hb": ["R4"], "value": 0, "last_writer": "-", "note": "leaves the monitor"}, {"n": 24, "t": 867, "who": "W2", "state": "writing", "ar": 0, "rl": [], "wa": "W2", "ww": 1, "hb": ["R4"], "value": 0, "last_writer": "-", "note": "has exclusive access"}, {"n": 25, "t": 955, "who": "R2", "state": "waiting", "ar": 0, "rl": [], "wa": "W2", "ww": 1, "hb": ["R4", "R2"], "value": 1, "last_writer": "W2", "note": "held back: writer active or waiting"}, {"n": 26, "t": 1017, "who": "R5", "state": "waiting", "ar": 0, "rl": [], "wa": "W2", "ww": 1, "hb": ["R4", "R2", "R5"], "value": 1, "last_writer": "W2", "note": "held back: writer active or waiting"}, {"n": 27, "t": 1042, "who": "R3", "state": "waiting", "ar": 0, "rl": [], "wa": "W2", "ww": 1, "hb": ["R4", "R2", "R5", "R3"], "value": 1, "last_writer": "W2", "note": "held back: writer active or waiting"}, {"n": 28, "t": 1173, "who": "R1", "state": "waiting", "ar": 0, "rl": [], "wa": "W2", "ww": 1, "hb": ["R4", "R2", "R5", "R3", "R1"], "value": 1, "last_writer": "W2", "note": "held back: writer active or waiting"}, {"n": 29, "t": 1212, "who": "W2", "state": "finished", "ar": 0, "rl": [], "wa": "no", "ww": 1, "hb": ["R4", "R2", "R5", "R3", "R1"], "value": 1, "last_writer": "W2", "note": "wrote value 1"}, {"n": 30, "t": 1213, "who": "W2", "state": "idle", "ar": 0, "rl": [], "wa": "no", "ww": 1, "hb": ["R4", "R2", "R5", "R3", "R1"], "value": 1, "last_writer": "W2", "note": "leaves the monitor"}, {"n": 31, "t": 1213, "who": "W1", "state": "writing", "ar": 0, "rl": [], "wa": "W1", "ww": 0, "hb": ["R4", "R2", "R5", "R3", "R1"], "value": 1, "last_writer": "W2", "note": "has exclusive access"}, {"n": 32, "t": 1540, "who": "W2", "state": "waiting", "ar": 0, "rl": [], "wa": "W1", "ww": 1, "hb": ["R4", "R2", "R5", "R3", "R1"], "value": 2, "last_writer": "W1", "note": "wants to write"}, {"n": 33, "t": 1699, "who": "W1", "state": "finished", "ar": 0, "rl": [], "wa": "no", "ww": 1, "hb": ["R4", "R2", "R5", "R3", "R1"], "value": 2, "last_writer": "W1", "note": "wrote value 2"}, {"n": 34, "t": 1699, "who": "W1", "state": "idle", "ar": 0, "rl": [], "wa": "no", "ww": 1, "hb": ["R4", "R2", "R5", "R3", "R1"], "value": 2, "last_writer": "W1", "note": "leaves the monitor"}, {"n": 35, "t": 1700, "who": "W2", "state": "writing", "ar": 0, "rl": [], "wa": "W2", "ww": 0, "hb": ["R4", "R2", "R5", "R3", "R1"], "value": 2, "last_writer": "W1", "note": "has exclusive access"}, {"n": 36, "t": 2065, "who": "W2", "state": "finished", "ar": 0, "rl": [], "wa": "no", "ww": 0, "hb": ["R4", "R2", "R5", "R3", "R1"], "value": 3, "last_writer": "W2", "note": "wrote value 3"}, {"n": 37, "t": 2066, "who": "W2", "state": "idle", "ar": 0, "rl": [], "wa": "no", "ww": 0, "hb": ["R4", "R2", "R5", "R3", "R1"], "value": 3, "last_writer": "W2", "note": "leaves the monitor"}, {"n": 38, "t": 2066, "who": "R4", "state": "reading", "ar": 1, "rl": ["R4"], "wa": "no", "ww": 0, "hb": ["R2", "R5", "R3", "R1"], "value": 3, "last_writer": "W2", "note": "reads value 3"}, {"n": 39, "t": 2066, "who": "R5", "state": "reading", "ar": 2, "rl": ["R4", "R5"], "wa": "no", "ww": 0, "hb": ["R2", "R3", "R1"], "value": 3, "last_writer": "W2", "note": "reads value 3"}, {"n": 40, "t": 2066, "who": "R2", "state": "reading", "ar": 3, "rl": ["R4", "R5", "R2"], "wa": "no", "ww": 0, "hb": ["R3", "R1"], "value": 3, "last_writer": "W2", "note": "reads value 3"}, {"n": 41, "t": 2066, "who": "R3", "state": "reading", "ar": 4, "rl": ["R4", "R5", "R2", "R3"], "wa": "no", "ww": 0, "hb": ["R1"], "value": 3, "last_writer": "W2", "note": "reads value 3"}, {"n": 42, "t": 2067, "who": "R1", "state": "reading", "ar": 5, "rl": ["R4", "R5", "R2", "R3", "R1"], "wa": "no", "ww": 0, "hb": [], "value": 3, "last_writer": "W2", "note": "reads value 3"}, {"n": 43, "t": 2088, "who": "W1", "state": "waiting", "ar": 5, "rl": ["R4", "R5", "R2", "R3", "R1"], "wa": "no", "ww": 1, "hb": [], "value": 3, "last_writer": "W2", "note": "wants to write"}, {"n": 44, "t": 2348, "who": "R1", "state": "finished", "ar": 4, "rl": ["R4", "R5", "R2", "R3"], "wa": "no", "ww": 1, "hb": [], "value": 3, "last_writer": "W2", "note": "finished reading"}, {"n": 45, "t": 2352, "who": "R1", "state": "idle", "ar": 4, "rl": ["R4", "R5", "R2", "R3"], "wa": "no", "ww": 1, "hb": [], "value": 3, "last_writer": "W2", "note": "leaves the monitor"}, {"n": 46, "t": 2384, "who": "R3", "state": "finished", "ar": 3, "rl": ["R4", "R5", "R2"], "wa": "no", "ww": 1, "hb": [], "value": 3, "last_writer": "W2", "note": "finished reading"}, {"n": 47, "t": 2384, "who": "R3", "state": "idle", "ar": 3, "rl": ["R4", "R5", "R2"], "wa": "no", "ww": 1, "hb": [], "value": 3, "last_writer": "W2", "note": "leaves the monitor"}, {"n": 48, "t": 2412, "who": "R5", "state": "finished", "ar": 2, "rl": ["R4", "R2"], "wa": "no", "ww": 1, "hb": [], "value": 3, "last_writer": "W2", "note": "finished reading"}, {"n": 49, "t": 2413, "who": "R5", "state": "idle", "ar": 2, "rl": ["R4", "R2"], "wa": "no", "ww": 1, "hb": [], "value": 3, "last_writer": "W2", "note": "leaves the monitor"}, {"n": 50, "t": 2414, "who": "W2", "state": "waiting", "ar": 2, "rl": ["R4", "R2"], "wa": "no", "ww": 2, "hb": [], "value": 3, "last_writer": "W2", "note": "wants to write"}, {"n": 51, "t": 2419, "who": "R4", "state": "finished", "ar": 1, "rl": ["R2"], "wa": "no", "ww": 2, "hb": [], "value": 3, "last_writer": "W2", "note": "finished reading"}, {"n": 52, "t": 2420, "who": "R4", "state": "idle", "ar": 1, "rl": ["R2"], "wa": "no", "ww": 2, "hb": [], "value": 3, "last_writer": "W2", "note": "leaves the monitor"}, {"n": 53, "t": 2495, "who": "R2", "state": "finished", "ar": 0, "rl": [], "wa": "no", "ww": 2, "hb": [], "value": 3, "last_writer": "W2", "note": "finished reading"}, {"n": 54, "t": 2496, "who": "R2", "state": "idle", "ar": 0, "rl": [], "wa": "no", "ww": 2, "hb": [], "value": 3, "last_writer": "W2", "note": "leaves the monitor"}, {"n": 55, "t": 2496, "who": "W1", "state": "writing", "ar": 0, "rl": [], "wa": "W1", "ww": 1, "hb": [], "value": 3, "last_writer": "W2", "note": "has exclusive access"}, {"n": 56, "t": 2595, "who": "R1", "state": "waiting", "ar": 0, "rl": [], "wa": "W1", "ww": 1, "hb": ["R1"], "value": 4, "last_writer": "W1", "note": "held back: writer active or waiting"}, {"n": 57, "t": 2641, "who": "R3", "state": "waiting", "ar": 0, "rl": [], "wa": "W1", "ww": 1, "hb": ["R1", "R3"], "value": 4, "last_writer": "W1", "note": "held back: writer active or waiting"}, {"n": 58, "t": 2657, "who": "R5", "state": "waiting", "ar": 0, "rl": [], "wa": "W1", "ww": 1, "hb": ["R1", "R3", "R5"], "value": 4, "last_writer": "W1", "note": "held back: writer active or waiting"}, {"n": 59, "t": 2927, "who": "W1", "state": "finished", "ar": 0, "rl": [], "wa": "no", "ww": 1, "hb": ["R1", "R3", "R5"], "value": 4, "last_writer": "W1", "note": "wrote value 4"}, {"n": 60, "t": 2927, "who": "W1", "state": "idle", "ar": 0, "rl": [], "wa": "no", "ww": 1, "hb": ["R1", "R3", "R5"], "value": 4, "last_writer": "W1", "note": "leaves the monitor"}, {"n": 61, "t": 2927, "who": "W2", "state": "writing", "ar": 0, "rl": [], "wa": "W2", "ww": 0, "hb": ["R1", "R3", "R5"], "value": 4, "last_writer": "W1", "note": "has exclusive access"}, {"n": 62, "t": 2949, "who": "R2", "state": "waiting", "ar": 0, "rl": [], "wa": "W2", "ww": 0, "hb": ["R1", "R3", "R5", "R2"], "value": 5, "last_writer": "W2", "note": "held back: writer active or waiting"}, {"n": 63, "t": 2955, "who": "R4", "state": "waiting", "ar": 0, "rl": [], "wa": "W2", "ww": 0, "hb": ["R1", "R3", "R5", "R2", "R4"], "value": 5, "last_writer": "W2", "note": "held back: writer active or waiting"}, {"n": 64, "t": 3206, "who": "W1", "state": "waiting", "ar": 0, "rl": [], "wa": "W2", "ww": 1, "hb": ["R1", "R3", "R5", "R2", "R4"], "value": 5, "last_writer": "W2", "note": "wants to write"}, {"n": 65, "t": 3249, "who": "W2", "state": "finished", "ar": 0, "rl": [], "wa": "no", "ww": 1, "hb": ["R1", "R3", "R5", "R2", "R4"], "value": 5, "last_writer": "W2", "note": "wrote value 5"}, {"n": 66, "t": 3250, "who": "W2", "state": "idle", "ar": 0, "rl": [], "wa": "no", "ww": 1, "hb": ["R1", "R3", "R5", "R2", "R4"], "value": 5, "last_writer": "W2", "note": "leaves the monitor"}, {"n": 67, "t": 3250, "who": "W1", "state": "writing", "ar": 0, "rl": [], "wa": "W1", "ww": 0, "hb": ["R1", "R3", "R5", "R2", "R4"], "value": 5, "last_writer": "W2", "note": "has exclusive access"}, {"n": 68, "t": 3651, "who": "W1", "state": "finished", "ar": 0, "rl": [], "wa": "no", "ww": 0, "hb": ["R1", "R3", "R5", "R2", "R4"], "value": 6, "last_writer": "W1", "note": "wrote value 6"}, {"n": 69, "t": 3652, "who": "W1", "state": "idle", "ar": 0, "rl": [], "wa": "no", "ww": 0, "hb": ["R1", "R3", "R5", "R2", "R4"], "value": 6, "last_writer": "W1", "note": "leaves the monitor"}, {"n": 70, "t": 3652, "who": "R1", "state": "reading", "ar": 1, "rl": ["R1"], "wa": "no", "ww": 0, "hb": ["R3", "R5", "R2", "R4"], "value": 6, "last_writer": "W1", "note": "reads value 6"}, {"n": 71, "t": 3653, "who": "R3", "state": "reading", "ar": 2, "rl": ["R1", "R3"], "wa": "no", "ww": 0, "hb": ["R5", "R2", "R4"], "value": 6, "last_writer": "W1", "note": "reads value 6"}, {"n": 72, "t": 3653, "who": "R5", "state": "reading", "ar": 3, "rl": ["R1", "R3", "R5"], "wa": "no", "ww": 0, "hb": ["R2", "R4"], "value": 6, "last_writer": "W1", "note": "reads value 6"}, {"n": 73, "t": 3653, "who": "R2", "state": "reading", "ar": 4, "rl": ["R1", "R3", "R5", "R2"], "wa": "no", "ww": 0, "hb": ["R4"], "value": 6, "last_writer": "W1", "note": "reads value 6"}, {"n": 74, "t": 3653, "who": "R4", "state": "reading", "ar": 5, "rl": ["R1", "R3", "R5", "R2", "R4"], "wa": "no", "ww": 0, "hb": [], "value": 6, "last_writer": "W1", "note": "reads value 6"}, {"n": 75, "t": 3864, "who": "R1", "state": "finished", "ar": 4, "rl": ["R3", "R5", "R2", "R4"], "wa": "no", "ww": 0, "hb": [], "value": 6, "last_writer": "W1", "note": "finished reading"}, {"n": 76, "t": 3864, "who": "R1", "state": "idle", "ar": 4, "rl": ["R3", "R5", "R2", "R4"], "wa": "no", "ww": 0, "hb": [], "value": 6, "last_writer": "W1", "note": "leaves the monitor"}, {"n": 77, "t": 3889, "who": "R4", "state": "finished", "ar": 3, "rl": ["R3", "R5", "R2"], "wa": "no", "ww": 0, "hb": [], "value": 6, "last_writer": "W1", "note": "finished reading"}, {"n": 78, "t": 3889, "who": "R4", "state": "idle", "ar": 3, "rl": ["R3", "R5", "R2"], "wa": "no", "ww": 0, "hb": [], "value": 6, "last_writer": "W1", "note": "leaves the monitor"}, {"n": 79, "t": 3964, "who": "R3", "state": "finished", "ar": 2, "rl": ["R5", "R2"], "wa": "no", "ww": 0, "hb": [], "value": 6, "last_writer": "W1", "note": "finished reading"}, {"n": 80, "t": 3965, "who": "R3", "state": "idle", "ar": 2, "rl": ["R5", "R2"], "wa": "no", "ww": 0, "hb": [], "value": 6, "last_writer": "W1", "note": "leaves the monitor"}, {"n": 81, "t": 4074, "who": "R5", "state": "finished", "ar": 1, "rl": ["R2"], "wa": "no", "ww": 0, "hb": [], "value": 6, "last_writer": "W1", "note": "finished reading"}, {"n": 82, "t": 4075, "who": "R5", "state": "idle", "ar": 1, "rl": ["R2"], "wa": "no", "ww": 0, "hb": [], "value": 6, "last_writer": "W1", "note": "leaves the monitor"}, {"n": 83, "t": 4117, "who": "R2", "state": "finished", "ar": 0, "rl": [], "wa": "no", "ww": 0, "hb": [], "value": 6, "last_writer": "W1", "note": "finished reading"}, {"n": 84, "t": 4118, "who": "R2", "state": "idle", "ar": 0, "rl": [], "wa": "no", "ww": 0, "hb": [], "value": 6, "last_writer": "W1", "note": "leaves the monitor"}];
+const READERS = ["R1", "R2", "R3", "R4", "R5"];
+const WRITERS = ["W1", "W2"];
+const TOTAL = EVENTS.length ? Math.max(EVENTS[EVENTS.length - 1].t, 1) : 1;
+const COLORS = { waiting: "#e0b81a", reading: "#3aa655", writing: "#dd4a58" };
+let idx = 0, clock = 0, timer = null;
+
+function esc(s) { return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
+function $(id) { return document.getElementById(id); }
+function listOrNone(a) { return a.length ? a.join(", ") : "none"; }
+
+// ---- static timeline, built once from the recorded events ----
+function buildTimeline() {
+  const names = ["RES"].concat(READERS, WRITERS);
+  let out = "";
+  names.forEach(function (n) {
+    out += '<div class="tl-row"><div class="tl-name">' + n + '</div><div class="tl-track" id="tr-' + n + '"></div></div>';
+  });
+  $("timeline").innerHTML = out;
+  function addSeg(track, from, to, color) {
+    if (to <= from) return;
+    const d = document.createElement("div");
+    d.className = "seg";
+    d.style.left = (from / TOTAL * 100) + "%";
+    d.style.width = ((to - from) / TOTAL * 100) + "%";
+    d.style.background = color;
+    $(track).appendChild(d);
+  }
+  names.forEach(function (n) {
+    if (n === "RES") {
+      EVENTS.forEach(function (e, i) {
+        const end = i + 1 < EVENTS.length ? EVENTS[i + 1].t : TOTAL;
+        if (e.wa !== "no") addSeg("tr-RES", e.t, end, COLORS.writing);
+        else if (e.rl.length > 0) addSeg("tr-RES", e.t, end, COLORS.reading);
+      });
+    } else {
+      const mine = EVENTS.filter(function (e) { return e.who === n; });
+      mine.forEach(function (e, i) {
+        const end = i + 1 < mine.length ? mine[i + 1].t : TOTAL;
+        if (COLORS[e.state]) addSeg("tr-" + n, e.t, end, COLORS[e.state]);
+      });
+    }
+  });
+  const ph = document.createElement("div");
+  ph.id = "playhead";
+  ph.style.height = (names.length * 28 + 4) + "px";
+  $("timeline").appendChild(ph);
+}
+
+function movePlayhead() {
+  const first = document.querySelector(".tl-track");
+  const tl = $("timeline").getBoundingClientRect();
+  const tr = first.getBoundingClientRect();
+  $("playhead").style.left = (tr.left - tl.left + tr.width * Math.min(clock / TOTAL, 1)) + "px";
+}
+
+// ---- show the state after the first idx events ----
+function render() {
+  const st = {};
+  READERS.concat(WRITERS).forEach(function (w) { st[w] = { state: "idle", value: 0 }; });
+  let last = null;
+  for (let i = 0; i < idx; i++) {
+    const e = EVENTS[i];
+    st[e.who] = { state: e.state, value: e.value };
+    last = e;
+  }
+  function boxes(list) {
+    return list.map(function (w) {
+      const s = st[w];
+      let text = s.state, extra = "";
+      if (s.state === "finished") text = "finished " + (w[0] === "R" ? "reading" : "writing");
+      if (w[0] === "R" && s.state === "reading") extra = "<small>sees value " + s.value + "</small>";
+      if (w[0] === "W" && s.state === "finished") extra = "<small>value is now " + s.value + "</small>";
+      return '<div class="box ' + s.state + '"><b>' + w + "</b>" + text + extra + "</div>";
+    }).join("");
+  }
+  $("readers").innerHTML = boxes(READERS);
+  $("writers").innerHTML = boxes(WRITERS);
+
+  let status = '<span class="free">FREE</span>';
+  if (last && last.wa !== "no") status = '<span class="locked">BEING WRITTEN by ' + last.wa + " (exclusive)</span>";
+  else if (last && last.rl.length > 0) status = '<span class="free">BEING READ by ' + last.rl.join(", ") + " (" + last.rl.length + " at once)</span>";
+  $("status").innerHTML = status;
+  $("value").textContent = last ? last.value : 0;
+  $("lastw").textContent = last ? last.last_writer : "-";
+
+  $("m_ar").textContent = last ? last.ar : 0;
+  $("m_wa").textContent = last && last.wa !== "no" ? "True" : "False";
+  $("m_ww").textContent = last ? last.ww : 0;
+  $("m_hb").textContent = last ? listOrNone(last.hb) : "none";
+
+  $("clock").textContent = Math.round(clock) + " ms";
+  $("evno").textContent = idx;
+  let rows = "";
+  for (let i = 0; i < idx; i++) {
+    const e = EVENTS[i];
+    rows += "<tr" + (i === idx - 1 ? ' class="now"' : "") + "><td>" + e.n + "</td><td>" + e.t + " ms</td><td>" + e.who +
+      "</td><td>" + e.state + "</td><td>" + e.ar + "</td><td>" + (e.wa !== "no" ? "True (" + esc(e.wa) + ")" : "False") +
+      "</td><td>" + e.ww + "</td><td>" + esc(listOrNone(e.hb)) + "</td><td>" + esc(e.note) + "</td></tr>";
+  }
+  $("log").innerHTML = rows;
+  $("logwrap").scrollTop = $("logwrap").scrollHeight;
+  movePlayhead();
+}
+
+// ---- controls ----
+function stop() { clearInterval(timer); timer = null; $("play").textContent = "Play"; }
+function tick() {
+  clock += 40 * parseFloat($("speed").value);
+  while (idx < EVENTS.length && EVENTS[idx].t <= clock) idx++;
+  if (idx >= EVENTS.length && clock >= TOTAL) { clock = TOTAL; stop(); }
+  render();
+}
+$("play").onclick = function () {
+  if (timer) { stop(); return; }
+  if (idx >= EVENTS.length) { idx = 0; clock = 0; }
+  $("play").textContent = "Pause";
+  timer = setInterval(tick, 40);
+};
+$("step").onclick = function () {
+  stop();
+  if (idx < EVENTS.length) { idx++; clock = EVENTS[idx - 1].t; render(); }
+};
+$("reset").onclick = function () { stop(); idx = 0; clock = 0; render(); };
+window.onresize = movePlayhead;
+
+$("evtotal").textContent = EVENTS.length;
+$("endms").textContent = TOTAL + " ms";
+buildTimeline();
+render();
+</script>
+</body>
+</html>

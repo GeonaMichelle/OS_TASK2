@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Dining Philosophers (4) - Semaphore Solution</title>
+<style>
+  body { font-family: Arial, sans-serif; background: #eef0f4; color: #1f2937; margin: 0; }
+  .top { background: #3b2a55; color: #fff; padding: 16px 28px; }
+  .top h1 { font-size: 24px; margin: 0 0 8px; }
+  .top p { margin: 0 0 4px; font-size: 14px; }
+  .ok { color: #5fe08a; font-weight: bold; }
+  .bad { color: #ff7b86; font-weight: bold; }
+  .main { padding: 20px 28px; }
+  .card { background: #fff; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,.12); padding: 16px 18px; margin-bottom: 16px; }
+  .card h2 { font-size: 16px; margin: 0 0 12px; color: #12284c; }
+  .bar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .bar button { padding: 8px 18px; font-size: 15px; background: #f0f0f0; border: 1px solid #888; border-radius: 4px; cursor: pointer; }
+  .bar select { padding: 6px; font-size: 15px; }
+  .spacer { flex: 1; }
+  .chip { font-size: 13px; padding: 3px 10px; border-radius: 4px; border: 1px solid #aaa; margin-left: 4px; }
+  .row2 { display: grid; grid-template-columns: 1.15fr 1fr; gap: 16px; }
+  .boxes { display: flex; flex-wrap: wrap; gap: 12px; }
+  .box { width: 216px; min-height: 96px; padding: 12px 8px; text-align: center; border-radius: 6px; border: 2px solid #aaa; font-size: 18px; box-sizing: border-box; }
+  .box b { display: block; font-size: 18px; }
+  .box small { display: block; font-size: 12px; margin-top: 6px; }
+  .fk { width: 196px; min-height: 76px; }
+  .thinking { background: #e5e5e5; border-color: #aaa; }
+  .hungry { background: #fdeeb4; border-color: #e0b81a; }
+  .acquiring { background: #fde0c4; border-color: #f28c28; }
+  .eating { background: #d3ecd7; border-color: #3aa655; }
+  .releasing { background: #cfe2ff; border-color: #3b82f6; }
+  .inuse { background: #f8d4d8; border-color: #dd4a58; }
+  .free { background: #f6f6f6; border-color: #aaa; }
+  .tl-row { display: flex; align-items: center; margin-bottom: 6px; }
+  .tl-name { width: 38px; font-weight: bold; font-size: 14px; }
+  .tl-track { position: relative; flex: 1; height: 22px; background: #eee; border-radius: 3px; }
+  .seg { position: absolute; top: 0; height: 22px; min-width: 3px; }
+  #playhead { position: absolute; top: -4px; width: 2px; background: #000; z-index: 5; }
+  .tl-axis { display: flex; justify-content: space-between; margin-left: 38px; font-size: 12px; color: #555; }
+  .logwrap { max-height: 300px; overflow-y: auto; }
+  table { border-collapse: collapse; width: 100%; font-size: 14px; }
+  th { text-align: left; background: #edf0f5; padding: 6px 8px; position: sticky; top: 0; }
+  td { padding: 5px 8px; border-bottom: 1px solid #e3e3e3; }
+  tr.now td { font-weight: bold; }
+  ul.checks { margin: 0; padding-left: 20px; line-height: 1.7; }
+  .t p { margin: 8px 0; }
+</style>
+</head>
+<body>
+<div class="top">
+  <h1>Dining Philosophers (4) - Semaphore Solution (replay of a real run)</h1>
+  <p>Semaphores: fork[0..3] = 1 each, room = 3 (at most N-1 philosophers compete -&gt; no deadlock)</p>
+  <p>4 philosophers, 3 meals each | 96 events recorded | meals: P0=3, P1=3, P2=3, P3=3 | <span class="ok">all checks passed - no deadlock</span></p>
+</div>
+<div class="main">
+
+<div class="card bar">
+  <button id="play">Play</button><button id="step">Step</button><button id="reset">Reset</button>
+  <span>speed</span>
+  <select id="speed"><option value="0.5">0.5x</option><option value="1" selected>1x</option>
+    <option value="2">2x</option><option value="4">4x</option></select>
+  <span>clock: <b id="clock">0 ms</b></span>
+  <span>event <b id="evno">0</b> / <span id="evtotal"></span></span>
+  <span class="spacer"></span>
+  <span>
+    <span class="chip thinking">thinking</span><span class="chip hungry">hungry</span><span class="chip acquiring">acquiring forks</span><span class="chip eating">eating</span><span class="chip releasing">releasing</span>
+  </span>
+</div>
+
+<div class="card"><h2>Philosophers</h2><div class="boxes" id="phils"></div></div>
+
+<div class="row2">
+  <div class="card"><h2>Forks (shared resources)</h2><div class="boxes" id="forks"></div></div>
+  <div class="card t">
+    <h2>Table state</h2>
+    <p>eating now: <b id="t_eat">none</b></p>
+    <p>hungry / acquiring: <span id="t_hungry">none</span></p>
+    <p>in the room (limit 3): <b id="t_room">0</b></p>
+    <p>forks in use: <span id="t_forks">0 / 4</span></p>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Timeline (P rows: philosopher state; F rows: red = fork in use)</h2>
+  <div id="timeline" style="position:relative"></div>
+  <div class="tl-axis"><span>0 ms</span><span id="endms"></span></div>
+</div>
+
+<div class="card">
+  <h2>Event log recorded by the program</h2>
+  <div class="logwrap" id="logwrap">
+    <table><thead><tr><th>#</th><th>time</th><th>who</th><th>state</th><th>F0</th><th>F1</th><th>F2</th><th>F3</th><th>eating</th><th>note</th></tr></thead>
+    <tbody id="log"></tbody></table>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Automatic verification checks</h2>
+  <ul class="checks"><li><span style="color:#198754;font-weight:bold">PASS</span> - No fork was ever held by two philosophers at once</li><li><span style="color:#198754;font-weight:bold">PASS</span> - Two neighbours never ate at the same time</li><li><span style="color:#198754;font-weight:bold">PASS</span> - A philosopher ate only while holding both of his forks</li><li><span style="color:#198754;font-weight:bold">PASS</span> - At most 3 philosophers were in the room at once (max seen: 3)</li><li><span style="color:#198754;font-weight:bold">PASS</span> - Every philosopher ate all 3 meals (no starvation in this run)</li><li><span style="color:#198754;font-weight:bold">PASS</span> - No deadlock: every philosopher thread finished</li><li><span style="color:#198754;font-weight:bold">PASS</span> - At the end all forks are free and the room is empty</li></ul>
+  <p style="font-size:13px;color:#555">Generated 22-10-2026 19:14:22. The page replays the events recorded by the Python program;
+  the thread order can be different in every run.</p>
+</div>
+
+</div>
+<script>
+const EVENTS = [{"n": 1, "t": 165, "who": "P1", "state": "hungry", "forks": ["-", "-", "-", "-"], "eating": [], "room": 0, "note": "is hungry (meal 1), waiting for a place at the table"}, {"n": 2, "t": 165, "who": "P1", "state": "acquiring", "forks": ["-", "-", "-", "-"], "eating": [], "room": 1, "note": "entered the room, trying to take forks F1 and F2"}, {"n": 3, "t": 165, "who": "P1", "state": "acquiring", "forks": ["-", "P1", "-", "-"], "eating": [], "room": 1, "note": "picked up left fork F1"}, {"n": 4, "t": 169, "who": "P3", "state": "hungry", "forks": ["-", "P1", "-", "-"], "eating": [], "room": 1, "note": "is hungry (meal 1), waiting for a place at the table"}, {"n": 5, "t": 170, "who": "P3", "state": "acquiring", "forks": ["-", "P1", "-", "-"], "eating": [], "room": 2, "note": "entered the room, trying to take forks F3 and F0"}, {"n": 6, "t": 170, "who": "P3", "state": "acquiring", "forks": ["-", "P1", "-", "P3"], "eating": [], "room": 2, "note": "picked up left fork F3"}, {"n": 7, "t": 268, "who": "P1", "state": "acquiring", "forks": ["-", "P1", "P1", "P3"], "eating": [], "room": 2, "note": "picked up right fork F2"}, {"n": 8, "t": 269, "who": "P1", "state": "eating", "forks": ["-", "P1", "P1", "P3"], "eating": ["P1"], "room": 2, "note": "has both forks F1 and F2 and eats"}, {"n": 9, "t": 364, "who": "P3", "state": "acquiring", "forks": ["P3", "P1", "P1", "P3"], "eating": ["P1"], "room": 2, "note": "picked up right fork F0"}, {"n": 10, "t": 364, "who": "P3", "state": "eating", "forks": ["P3", "P1", "P1", "P3"], "eating": ["P1", "P3"], "room": 2, "note": "has both forks F3 and F0 and eats"}, {"n": 11, "t": 481, "who": "P2", "state": "hungry", "forks": ["P3", "P1", "P1", "P3"], "eating": ["P1", "P3"], "room": 2, "note": "is hungry (meal 1), waiting for a place at the table"}, {"n": 12, "t": 482, "who": "P2", "state": "acquiring", "forks": ["P3", "P1", "P1", "P3"], "eating": ["P1", "P3"], "room": 3, "note": "entered the room, trying to take forks F2 and F3"}, {"n": 13, "t": 552, "who": "P0", "state": "hungry", "forks": ["P3", "P1", "P1", "P3"], "eating": ["P1", "P3"], "room": 3, "note": "is hungry (meal 1), waiting for a place at the table"}, {"n": 14, "t": 722, "who": "P3", "state": "releasing", "forks": ["P3", "P1", "P1", "-"], "eating": ["P1"], "room": 3, "note": "puts down left fork F3"}, {"n": 15, "t": 723, "who": "P3", "state": "releasing", "forks": ["-", "P1", "P1", "-"], "eating": ["P1"], "room": 3, "note": "puts down right fork F0"}, {"n": 16, "t": 723, "who": "P3", "state": "thinking", "forks": ["-", "P1", "P1", "-"], "eating": ["P1"], "room": 2, "note": "back to thinking, leaving the room"}, {"n": 17, "t": 723, "who": "P0", "state": "acquiring", "forks": ["-", "P1", "P1", "-"], "eating": ["P1"], "room": 3, "note": "entered the room, trying to take forks F0 and F1"}, {"n": 18, "t": 723, "who": "P0", "state": "acquiring", "forks": ["P0", "P1", "P1", "-"], "eating": ["P1"], "room": 3, "note": "picked up left fork F0"}, {"n": 19, "t": 746, "who": "P1", "state": "releasing", "forks": ["P0", "-", "P1", "-"], "eating": [], "room": 3, "note": "puts down left fork F1"}, {"n": 20, "t": 747, "who": "P1", "state": "releasing", "forks": ["P0", "-", "-", "-"], "eating": [], "room": 3, "note": "puts down right fork F2"}, {"n": 21, "t": 748, "who": "P1", "state": "thinking", "forks": ["P0", "-", "-", "-"], "eating": [], "room": 2, "note": "back to thinking, leaving the room"}, {"n": 22, "t": 748, "who": "P2", "state": "acquiring", "forks": ["P0", "-", "P2", "-"], "eating": [], "room": 2, "note": "picked up left fork F2"}, {"n": 23, "t": 903, "who": "P2", "state": "acquiring", "forks": ["P0", "-", "P2", "P2"], "eating": [], "room": 2, "note": "picked up right fork F3"}, {"n": 24, "t": 903, "who": "P2", "state": "eating", "forks": ["P0", "-", "P2", "P2"], "eating": ["P2"], "room": 2, "note": "has both forks F2 and F3 and eats"}, {"n": 25, "t": 916, "who": "P0", "state": "acquiring", "forks": ["P0", "P0", "P2", "P2"], "eating": ["P2"], "room": 2, "note": "picked up right fork F1"}, {"n": 26, "t": 916, "who": "P0", "state": "eating", "forks": ["P0", "P0", "P2", "P2"], "eating": ["P0", "P2"], "room": 2, "note": "has both forks F0 and F1 and eats"}, {"n": 27, "t": 1043, "who": "P3", "state": "hungry", "forks": ["P0", "P0", "P2", "P2"], "eating": ["P0", "P2"], "room": 2, "note": "is hungry (meal 2), waiting for a place at the table"}, {"n": 28, "t": 1043, "who": "P3", "state": "acquiring", "forks": ["P0", "P0", "P2", "P2"], "eating": ["P0", "P2"], "room": 3, "note": "entered the room, trying to take forks F3 and F0"}, {"n": 29, "t": 1246, "who": "P2", "state": "releasing", "forks": ["P0", "P0", "-", "P2"], "eating": ["P0"], "room": 3, "note": "puts down left fork F2"}, {"n": 30, "t": 1246, "who": "P2", "state": "releasing", "forks": ["P0", "P0", "-", "-"], "eating": ["P0"], "room": 3, "note": "puts down right fork F3"}, {"n": 31, "t": 1246, "who": "P2", "state": "thinking", "forks": ["P0", "P0", "-", "-"], "eating": ["P0"], "room": 2, "note": "back to thinking, leaving the room"}, {"n": 32, "t": 1246, "who": "P3", "state": "acquiring", "forks": ["P0", "P0", "-", "P3"], "eating": ["P0"], "room": 2, "note": "picked up left fork F3"}, {"n": 33, "t": 1332, "who": "P1", "state": "hungry", "forks": ["P0", "P0", "-", "P3"], "eating": ["P0"], "room": 2, "note": "is hungry (meal 2), waiting for a place at the table"}, {"n": 34, "t": 1332, "who": "P1", "state": "acquiring", "forks": ["P0", "P0", "-", "P3"], "eating": ["P0"], "room": 3, "note": "entered the room, trying to take forks F1 and F2"}, {"n": 35, "t": 1413, "who": "P0", "state": "releasing", "forks": ["-", "P0", "-", "P3"], "eating": [], "room": 3, "note": "puts down left fork F0"}, {"n": 36, "t": 1413, "who": "P0", "state": "releasing", "forks": ["-", "-", "-", "P3"], "eating": [], "room": 3, "note": "puts down right fork F1"}, {"n": 37, "t": 1413, "who": "P0", "state": "thinking", "forks": ["-", "-", "-", "P3"], "eating": [], "room": 2, "note": "back to thinking, leaving the room"}, {"n": 38, "t": 1413, "who": "P3", "state": "acquiring", "forks": ["P3", "-", "-", "P3"], "eating": [], "room": 2, "note": "picked up right fork F0"}, {"n": 39, "t": 1414, "who": "P3", "state": "eating", "forks": ["P3", "-", "-", "P3"], "eating": ["P3"], "room": 2, "note": "has both forks F3 and F0 and eats"}, {"n": 40, "t": 1414, "who": "P1", "state": "acquiring", "forks": ["P3", "P1", "-", "P3"], "eating": ["P3"], "room": 2, "note": "picked up left fork F1"}, {"n": 41, "t": 1452, "who": "P2", "state": "hungry", "forks": ["P3", "P1", "-", "P3"], "eating": ["P3"], "room": 2, "note": "is hungry (meal 2), waiting for a place at the table"}, {"n": 42, "t": 1452, "who": "P2", "state": "acquiring", "forks": ["P3", "P1", "-", "P3"], "eating": ["P3"], "room": 3, "note": "entered the room, trying to take forks F2 and F3"}, {"n": 43, "t": 1452, "who": "P2", "state": "acquiring", "forks": ["P3", "P1", "P2", "P3"], "eating": ["P3"], "room": 3, "note": "picked up left fork F2"}, {"n": 44, "t": 1784, "who": "P3", "state": "releasing", "forks": ["P3", "P1", "P2", "-"], "eating": [], "room": 3, "note": "puts down left fork F3"}, {"n": 45, "t": 1784, "who": "P3", "state": "releasing", "forks": ["-", "P1", "P2", "-"], "eating": [], "room": 3, "note": "puts down right fork F0"}, {"n": 46, "t": 1785, "who": "P3", "state": "thinking", "forks": ["-", "P1", "P2", "-"], "eating": [], "room": 2, "note": "back to thinking, leaving the room"}, {"n": 47, "t": 1785, "who": "P2", "state": "acquiring", "forks": ["-", "P1", "P2", "P2"], "eating": [], "room": 2, "note": "picked up right fork F3"}, {"n": 48, "t": 1785, "who": "P2", "state": "eating", "forks": ["-", "P1", "P2", "P2"], "eating": ["P2"], "room": 2, "note": "has both forks F2 and F3 and eats"}, {"n": 49, "t": 1944, "who": "P0", "state": "hungry", "forks": ["-", "P1", "P2", "P2"], "eating": ["P2"], "room": 2, "note": "is hungry (meal 2), waiting for a place at the table"}, {"n": 50, "t": 1945, "who": "P0", "state": "acquiring", "forks": ["-", "P1", "P2", "P2"], "eating": ["P2"], "room": 3, "note": "entered the room, trying to take forks F0 and F1"}, {"n": 51, "t": 1945, "who": "P0", "state": "acquiring", "forks": ["P0", "P1", "P2", "P2"], "eating": ["P2"], "room": 3, "note": "picked up left fork F0"}, {"n": 52, "t": 2254, "who": "P3", "state": "hungry", "forks": ["P0", "P1", "P2", "P2"], "eating": ["P2"], "room": 3, "note": "is hungry (meal 3), waiting for a place at the table"}, {"n": 53, "t": 2344, "who": "P2", "state": "releasing", "forks": ["P0", "P1", "-", "P2"], "eating": [], "room": 3, "note": "puts down left fork F2"}, {"n": 54, "t": 2344, "who": "P2", "state": "releasing", "forks": ["P0", "P1", "-", "-"], "eating": [], "room": 3, "note": "puts down right fork F3"}, {"n": 55, "t": 2344, "who": "P2", "state": "thinking", "forks": ["P0", "P1", "-", "-"], "eating": [], "room": 2, "note": "back to thinking, leaving the room"}, {"n": 56, "t": 2344, "who": "P3", "state": "acquiring", "forks": ["P0", "P1", "-", "-"], "eating": [], "room": 3, "note": "entered the room, trying to take forks F3 and F0"}, {"n": 57, "t": 2345, "who": "P3", "state": "acquiring", "forks": ["P0", "P1", "-", "P3"], "eating": [], "room": 3, "note": "picked up left fork F3"}, {"n": 58, "t": 2345, "who": "P1", "state": "acquiring", "forks": ["P0", "P1", "P1", "P3"], "eating": [], "room": 3, "note": "picked up right fork F2"}, {"n": 59, "t": 2345, "who": "P1", "state": "eating", "forks": ["P0", "P1", "P1", "P3"], "eating": ["P1"], "room": 3, "note": "has both forks F1 and F2 and eats"}, {"n": 60, "t": 2718, "who": "P2", "state": "hungry", "forks": ["P0", "P1", "P1", "P3"], "eating": ["P1"], "room": 3, "note": "is hungry (meal 3), waiting for a place at the table"}, {"n": 61, "t": 2732, "who": "P1", "state": "releasing", "forks": ["P0", "-", "P1", "P3"], "eating": [], "room": 3, "note": "puts down left fork F1"}, {"n": 62, "t": 2732, "who": "P1", "state": "releasing", "forks": ["P0", "-", "-", "P3"], "eating": [], "room": 3, "note": "puts down right fork F2"}, {"n": 63, "t": 2732, "who": "P1", "state": "thinking", "forks": ["P0", "-", "-", "P3"], "eating": [], "room": 2, "note": "back to thinking, leaving the room"}, {"n": 64, "t": 2733, "who": "P2", "state": "acquiring", "forks": ["P0", "-", "-", "P3"], "eating": [], "room": 3, "note": "entered the room, trying to take forks F2 and F3"}, {"n": 65, "t": 2733, "who": "P2", "state": "acquiring", "forks": ["P0", "-", "P2", "P3"], "eating": [], "room": 3, "note": "picked up left fork F2"}, {"n": 66, "t": 2733, "who": "P0", "state": "acquiring", "forks": ["P0", "P0", "P2", "P3"], "eating": [], "room": 3, "note": "picked up right fork F1"}, {"n": 67, "t": 2733, "who": "P0", "state": "eating", "forks": ["P0", "P0", "P2", "P3"], "eating": ["P0"], "room": 3, "note": "has both forks F0 and F1 and eats"}, {"n": 68, "t": 2846, "who": "P1", "state": "hungry", "forks": ["P0", "P0", "P2", "P3"], "eating": ["P0"], "room": 3, "note": "is hungry (meal 3), waiting for a place at the table"}, {"n": 69, "t": 3088, "who": "P0", "state": "releasing", "forks": ["-", "P0", "P2", "P3"], "eating": [], "room": 3, "note": "puts down left fork F0"}, {"n": 70, "t": 3088, "who": "P0", "state": "releasing", "forks": ["-", "-", "P2", "P3"], "eating": [], "room": 3, "note": "puts down right fork F1"}, {"n": 71, "t": 3088, "who": "P0", "state": "thinking", "forks": ["-", "-", "P2", "P3"], "eating": [], "room": 2, "note": "back to thinking, leaving the room"}, {"n": 72, "t": 3089, "who": "P3", "state": "acquiring", "forks": ["P3", "-", "P2", "P3"], "eating": [], "room": 2, "note": "picked up right fork F0"}, {"n": 73, "t": 3089, "who": "P3", "state": "eating", "forks": ["P3", "-", "P2", "P3"], "eating": ["P3"], "room": 2, "note": "has both forks F3 and F0 and eats"}, {"n": 74, "t": 3089, "who": "P1", "state": "acquiring", "forks": ["P3", "-", "P2", "P3"], "eating": ["P3"], "room": 3, "note": "entered the room, trying to take forks F1 and F2"}, {"n": 75, "t": 3089, "who": "P1", "state": "acquiring", "forks": ["P3", "P1", "P2", "P3"], "eating": ["P3"], "room": 3, "note": "picked up left fork F1"}, {"n": 76, "t": 3231, "who": "P0", "state": "hungry", "forks": ["P3", "P1", "P2", "P3"], "eating": ["P3"], "room": 3, "note": "is hungry (meal 3), waiting for a place at the table"}, {"n": 77, "t": 3434, "who": "P3", "state": "releasing", "forks": ["P3", "P1", "P2", "-"], "eating": [], "room": 3, "note": "puts down left fork F3"}, {"n": 78, "t": 3435, "who": "P3", "state": "releasing", "forks": ["-", "P1", "P2", "-"], "eating": [], "room": 3, "note": "puts down right fork F0"}, {"n": 79, "t": 3435, "who": "P3", "state": "thinking", "forks": ["-", "P1", "P2", "-"], "eating": [], "room": 2, "note": "back to thinking, leaving the room"}, {"n": 80, "t": 3435, "who": "P2", "state": "acquiring", "forks": ["-", "P1", "P2", "P2"], "eating": [], "room": 2, "note": "picked up right fork F3"}, {"n": 81, "t": 3435, "who": "P2", "state": "eating", "forks": ["-", "P1", "P2", "P2"], "eating": ["P2"], "room": 2, "note": "has both forks F2 and F3 and eats"}, {"n": 82, "t": 3436, "who": "P0", "state": "acquiring", "forks": ["-", "P1", "P2", "P2"], "eating": ["P2"], "room": 3, "note": "entered the room, trying to take forks F0 and F1"}, {"n": 83, "t": 3436, "who": "P0", "state": "acquiring", "forks": ["P0", "P1", "P2", "P2"], "eating": ["P2"], "room": 3, "note": "picked up left fork F0"}, {"n": 84, "t": 3988, "who": "P2", "state": "releasing", "forks": ["P0", "P1", "-", "P2"], "eating": [], "room": 3, "note": "puts down left fork F2"}, {"n": 85, "t": 3989, "who": "P2", "state": "releasing", "forks": ["P0", "P1", "-", "-"], "eating": [], "room": 3, "note": "puts down right fork F3"}, {"n": 86, "t": 3989, "who": "P2", "state": "thinking", "forks": ["P0", "P1", "-", "-"], "eating": [], "room": 2, "note": "back to thinking, leaving the room"}, {"n": 87, "t": 3989, "who": "P1", "state": "acquiring", "forks": ["P0", "P1", "P1", "-"], "eating": [], "room": 2, "note": "picked up right fork F2"}, {"n": 88, "t": 3989, "who": "P1", "state": "eating", "forks": ["P0", "P1", "P1", "-"], "eating": ["P1"], "room": 2, "note": "has both forks F1 and F2 and eats"}, {"n": 89, "t": 4446, "who": "P1", "state": "releasing", "forks": ["P0", "-", "P1", "-"], "eating": [], "room": 2, "note": "puts down left fork F1"}, {"n": 90, "t": 4448, "who": "P1", "state": "releasing", "forks": ["P0", "-", "-", "-"], "eating": [], "room": 2, "note": "puts down right fork F2"}, {"n": 91, "t": 4448, "who": "P1", "state": "thinking", "forks": ["P0", "-", "-", "-"], "eating": [], "room": 1, "note": "back to thinking, leaving the room"}, {"n": 92, "t": 4448, "who": "P0", "state": "acquiring", "forks": ["P0", "P0", "-", "-"], "eating": [], "room": 1, "note": "picked up right fork F1"}, {"n": 93, "t": 4448, "who": "P0", "state": "eating", "forks": ["P0", "P0", "-", "-"], "eating": ["P0"], "room": 1, "note": "has both forks F0 and F1 and eats"}, {"n": 94, "t": 5009, "who": "P0", "state": "releasing", "forks": ["-", "P0", "-", "-"], "eating": [], "room": 1, "note": "puts down left fork F0"}, {"n": 95, "t": 5009, "who": "P0", "state": "releasing", "forks": ["-", "-", "-", "-"], "eating": [], "room": 1, "note": "puts down right fork F1"}, {"n": 96, "t": 5009, "who": "P0", "state": "thinking", "forks": ["-", "-", "-", "-"], "eating": [], "room": 0, "note": "back to thinking, leaving the room"}];
+const N = 4;
+const PH = ["P0", "P1", "P2", "P3"];
+const FK = ["F0", "F1", "F2", "F3"];
+const TOTAL = EVENTS.length ? Math.max(EVENTS[EVENTS.length - 1].t, 1) : 1;
+const COLORS = { hungry: "#e0b81a", acquiring: "#f28c28", eating: "#3aa655", releasing: "#3b82f6" };
+let idx = 0, clock = 0, timer = null;
+
+function esc(s) { return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
+function $(id) { return document.getElementById(id); }
+function listOrNone(a) { return a.length ? a.join(", ") : "none"; }
+
+// ---- static timeline, built once from the recorded events ----
+function buildTimeline() {
+  const names = PH.concat(FK);
+  let out = "";
+  names.forEach(function (n) {
+    out += '<div class="tl-row"><div class="tl-name">' + n + '</div><div class="tl-track" id="tr-' + n + '"></div></div>';
+  });
+  $("timeline").innerHTML = out;
+  function addSeg(track, from, to, color) {
+    if (to <= from) return;
+    const d = document.createElement("div");
+    d.className = "seg";
+    d.style.left = (from / TOTAL * 100) + "%";
+    d.style.width = ((to - from) / TOTAL * 100) + "%";
+    d.style.background = color;
+    $(track).appendChild(d);
+  }
+  PH.forEach(function (p) {
+    const mine = EVENTS.filter(function (e) { return e.who === p; });
+    mine.forEach(function (e, i) {
+      const end = i + 1 < mine.length ? mine[i + 1].t : TOTAL;
+      if (COLORS[e.state]) addSeg("tr-" + p, e.t, end, COLORS[e.state]);
+    });
+  });
+  FK.forEach(function (f, k) {
+    EVENTS.forEach(function (e, i) {
+      const end = i + 1 < EVENTS.length ? EVENTS[i + 1].t : TOTAL;
+      if (e.forks[k] !== "-") addSeg("tr-" + f, e.t, end, "#dd4a58");
+    });
+  });
+  const ph = document.createElement("div");
+  ph.id = "playhead";
+  ph.style.height = (names.length * 28 + 4) + "px";
+  $("timeline").appendChild(ph);
+}
+
+function movePlayhead() {
+  const first = document.querySelector(".tl-track");
+  const tl = $("timeline").getBoundingClientRect();
+  const tr = first.getBoundingClientRect();
+  $("playhead").style.left = (tr.left - tl.left + tr.width * Math.min(clock / TOTAL, 1)) + "px";
+}
+
+// ---- show the state after the first idx events ----
+function render() {
+  const st = {};
+  PH.forEach(function (p) { st[p] = { state: "thinking", note: "" }; });
+  let last = null;
+  for (let i = 0; i < idx; i++) {
+    const e = EVENTS[i];
+    st[e.who] = { state: e.state, note: e.note };
+    last = e;
+  }
+  $("phils").innerHTML = PH.map(function (p) {
+    const s = st[p];
+    return '<div class="box ' + s.state + '"><b>' + p + "</b>" + s.state + "<small>" + esc(s.note) + "</small></div>";
+  }).join("");
+
+  const forks = last ? last.forks : FK.map(function () { return "-"; });
+  $("forks").innerHTML = FK.map(function (f, k) {
+    return forks[k] === "-"
+      ? '<div class="box fk free"><b>' + f + "</b>free</div>"
+      : '<div class="box fk inuse"><b>' + f + "</b>held by " + forks[k] + "</div>";
+  }).join("");
+
+  const eat = last ? last.eating : [];
+  $("t_eat").textContent = eat.length ? eat.join(", ") + " (" + eat.length + ")" : "none";
+  const hungry = PH.filter(function (p) { return st[p].state === "hungry" || st[p].state === "acquiring"; });
+  $("t_hungry").textContent = listOrNone(hungry);
+  $("t_room").textContent = last ? last.room : 0;
+  $("t_forks").textContent = forks.filter(function (x) { return x !== "-"; }).length + " / " + N;
+
+  $("clock").textContent = Math.round(clock) + " ms";
+  $("evno").textContent = idx;
+  let rows = "";
+  for (let i = 0; i < idx; i++) {
+    const e = EVENTS[i];
+    rows += "<tr" + (i === idx - 1 ? ' class="now"' : "") + "><td>" + e.n + "</td><td>" + e.t + " ms</td><td>" + e.who +
+      "</td><td>" + e.state.toUpperCase() + "</td>" + e.forks.map(function (f) { return "<td>" + f + "</td>"; }).join("") +
+      "<td>" + e.eating.length + "</td><td>" + esc(e.note) + "</td></tr>";
+  }
+  $("log").innerHTML = rows;
+  $("logwrap").scrollTop = $("logwrap").scrollHeight;
+  movePlayhead();
+}
+
+// ---- controls ----
+function stop() { clearInterval(timer); timer = null; $("play").textContent = "Play"; }
+function tick() {
+  clock += 40 * parseFloat($("speed").value);
+  while (idx < EVENTS.length && EVENTS[idx].t <= clock) idx++;
+  if (idx >= EVENTS.length && clock >= TOTAL) { clock = TOTAL; stop(); }
+  render();
+}
+$("play").onclick = function () {
+  if (timer) { stop(); return; }
+  if (idx >= EVENTS.length) { idx = 0; clock = 0; }
+  $("play").textContent = "Pause";
+  timer = setInterval(tick, 40);
+};
+$("step").onclick = function () {
+  stop();
+  if (idx < EVENTS.length) { idx++; clock = EVENTS[idx - 1].t; render(); }
+};
+$("reset").onclick = function () { stop(); idx = 0; clock = 0; render(); };
+window.onresize = movePlayhead;
+
+$("evtotal").textContent = EVENTS.length;
+$("endms").textContent = TOTAL + " ms";
+buildTimeline();
+render();
+</script>
+</body>
+</html>
